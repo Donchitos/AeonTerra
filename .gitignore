@@ -1,0 +1,57 @@
+# Unreal Engine
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+Build/
+
+# Visual Studio
+.vs/
+*.VC.db
+*.VC.VC.opendb
+*.opendb
+*.sln
+*.suo
+*.VC.db
+*.VC.VC.opendb
+*.log
+*.tlog
+
+# CLion
+.idea/
+cmake-build-*/
+
+# macOS
+.DS_Store
+
+# Linux
+*~
+
+# Compiled binaries
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+*.exe
+*.app
+
+# Debug files
+*.pdb
+*.idb
+*.ilk
+
+# Temp files
+*.swp
+*.swo
+
+# Local project files
+*.user
+*.userprefs
+*.userosscache
+
+# Project specific
+**/Saved/**/*.*
+**/Intermediate/**/*.*
+**/DerivedDataCache/**/*.*
+**/Build/**/*.*
