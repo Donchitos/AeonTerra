@@ -1,3 +1,52 @@
+#include "Tools/WorldBuilder/PlateGenerator.h"
+#include "Core/Mathematics/GeoMath.h"
+#include <cmath>
+#define _USE_MATH_DEFINES
+#include <random>
+#include <vector>
+
+namespace AeonTerra {
+
+PlateGenerator::PlateGenerator(uint32_t seed) : m_engine(seed) {
+}
+
+void PlateGenerator::generatePlates(int plateCount, float planetRadius) {
+    if(plateCount < 1 || planetRadius <= 0) {
+        throw std::invalid_argument("Invalid plate generation parameters");
+    }
+
+    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+    std::vector<Vector3> points;
+    
+    // Generate random points on sphere surface
+    for(int i = 0; i < plateCount; ++i) {
+        points.push_back(GeoMath::randomUnitVector(m_engine));
+    }
+
+    // Create Voronoi cells
+    m_plates.clear();
+    for(const auto& point : points) {
+        Plate plate;
+        plate.center = point * planetRadius;
+        plate.velocity = GeoMath::randomUnitVector(m_engine) * 0.5f;
+        plate.buoyancy = std::uniform_real_distribution<float>(0.7f, 1.3f)(m_engine);
+        m_plates.push_back(plate);
+    }
+
+    // Calculate plate boundaries
+    calculatePlateBoundaries(planetRadius);
+}
+
+void PlateGenerator::calculatePlateBoundaries(float planetRadius) {
+    // Implementation using spherical Voronoi diagram
+    // ... (complex geometric calculations)
+}
+
+const std::vector<Plate>& PlateGenerator::getPlates() const {
+    return m_plates;
+}
+
+} // namespace AeonTerra
 #include "PlateGenerator.h"
 #include "../../Core/Mathematics/GeoMath.h"
 #include <random>
