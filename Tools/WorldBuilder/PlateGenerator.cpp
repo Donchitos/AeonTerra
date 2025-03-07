@@ -5,17 +5,15 @@
 #include <random>
 #include <vector>
 
-namespace AeonTerra {
+namespace AeonTerra::Tools {
 
-PlateGenerator::PlateGenerator(uint32_t seed) : m_engine(seed) {
-}
+PlateGenerator::PlateGenerator(uint32_t seed) : m_engine(seed), m_plates() {}
 
 void PlateGenerator::generatePlates(int plateCount, float planetRadius) {
     if(plateCount < 1 || planetRadius <= 0) {
         throw std::invalid_argument("Invalid plate generation parameters");
     }
 
-    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
     std::vector<Vector3> points;
     
     // Generate random points on sphere surface
@@ -33,20 +31,53 @@ void PlateGenerator::generatePlates(int plateCount, float planetRadius) {
         m_plates.push_back(plate);
     }
 
-    // Calculate plate boundaries
-    calculatePlateBoundaries(planetRadius);
+    CreateVoronoiCells(m_plates, planetRadius);
 }
 
-void PlateGenerator::calculatePlateBoundaries(float planetRadius) {
-    // Implementation using spherical Voronoi diagram
-    // ... (complex geometric calculations)
+void PlateGenerator::CreateVoronoiCells(std::vector<Plate>& plates, float sphereRadius) {
+    // Generate Voronoi seed points
+    std::vector<SphericalCoord> seeds;
+    std::uniform_real_distribution<float> thetaDist(0.0f, static_cast<float>(M_PI));
+    std::uniform_real_distribution<float> phiDist(0.0f, static_cast<float>(2*M_PI));
+    
+    for(auto& plate : plates) {
+        seeds.push_back({
+            sphereRadius,
+            thetaDist(m_engine),
+            phiDist(m_engine)
+        });
+    }
+    
+    // Simplified Voronoi generation using nearest neighbor search
+    const int boundaryPoints = 100;
+    for(auto& plate : plates) {
+        plate.boundaries.clear();
+        for(int i=0; i<boundaryPoints; i++) {
+            SphericalCoord testPoint{
+                sphereRadius,
+                thetaDist(m_engine),
+                phiDist(m_engine)
+            };
+            
+            // Find nearest seed point
+            auto nearest = std::min_element(seeds.begin(), seeds.end(),
+                [&](const SphericalCoord& a, const SphericalCoord& b) {
+                    return GeoMath::GreatCircleDistance(testPoint, a)
+                         < GeoMath::GreatCircleDistance(testPoint, b);
+                });
+            
+            if(plate.id == static_cast<int>(std::distance(seeds.begin(), nearest))) {
+                plate.boundaries.push_back(testPoint);
+            }
+        }
+    }
 }
 
 const std::vector<Plate>& PlateGenerator::getPlates() const {
     return m_plates;
 }
 
-} // namespace AeonTerra
+} // namespace AeonTerra::Tools
 #include "PlateGenerator.h"
 #include "../../Core/Mathematics/GeoMath.h"
 #include <random>

@@ -17,6 +17,8 @@ struct Plate {
 class PlateGenerator {
 public:
     explicit PlateGenerator(uint32_t seed = std::random_device{}());
+    void generatePlates(int plateCount, float planetRadius);
+    const std::vector<Plate>& getPlates() const;
     
     void generatePlates(int plateCount, float planetRadius);
     const std::vector<Plate>& getPlates() const;

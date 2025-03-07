@@ -1,14 +1,21 @@
 #pragma once
 #include <cmath>
 
+#include "Core/CoreExports.h"
+
 namespace AeonTerra {
 namespace Math {
 
-struct SphericalCoord {
+struct AEONTERRA_API SphericalCoord {
     float radius;
-    float theta; // polar angle (radians)
-    float phi;   // azimuthal angle (radians)
+    float theta; // polar angle (radians) [0, π]
+    float phi;   // azimuthal angle (radians) [0, 2π)
+    
+    SphericalCoord(float r = 0.0f, float t = 0.0f, float p = 0.0f);
 };
+
+SphericalCoord::SphericalCoord(float r, float t, float p)
+    : radius(r), theta(t), phi(p) {}
 
 struct CartesianCoord {
     float x;
