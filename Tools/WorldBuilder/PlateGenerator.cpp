@@ -1,9 +1,14 @@
 #include "PlateGenerator.h"
-#include "Core/Mathematics/GeoMath.h"
-#include "Core/Mathematics/Vector3.h"
+#include "../../Core/Mathematics/GeoMath.h"
+#include "../../Core/Mathematics/Vector3.h"
 #include <random>
 #include <cmath>
 #include <algorithm>
+
+// Define M_PI if not available
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 namespace AeonTerra {
 namespace Tools {
