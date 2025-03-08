@@ -1,13 +1,21 @@
 #include "Tools/WorldBuilder/PlateGenerator.h"
+#include "Core/CoreExports.h"
 #include "Core/Mathematics/GeoMath.h"
-#include <cmath>
+#include "Core/Mathematics/Vector3.h"
 #define _USE_MATH_DEFINES
+#include <cmath>
+#include <numbers>
 #include <random>
+#include <stdexcept>
 #include <vector>
 
 namespace AeonTerra::Tools {
 
-PlateGenerator::PlateGenerator(uint32_t seed) : m_engine(seed), m_plates() {}
+AeonTerra::Tools::PlateGenerator::PlateGenerator(uint32_t seed)
+    : m_engine(seed),
+      m_plateCount(0),
+      m_planetRadius(6371.0f),
+      m_plates() {}
 
 void PlateGenerator::generatePlates(int plateCount, float planetRadius) {
     if(plateCount < 1 || planetRadius <= 0) {
@@ -143,4 +151,19 @@ void PlateGenerator::CreateVoronoiCells(std::vector<PlateTectonics::Plate>& plat
     }
 }
 
+void PlateGenerator::AssignPlateProperties(std::vector<PlateTectonics::Plate>& plates) {
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    
+    // Distribution for realistic plate properties
+    std::uniform_real_distribution<float> angVelDist(-0.01f, 0.01f);  // radians/year
+    std::uniform_real_distribution<float> thicknessDist(30.0f, 100.0f); // km
+    std::uniform_real_distribution<float> densityDist(2700.0f, 3300.0f); // kg/m³
+    
+    for(auto& plate : plates) {
+        plate.angularVelocity = angVelDist(gen);
+        plate.thickness = thicknessDist(gen);
+        plate.density = densityDist(gen);
+    }
+}
 // Rest of existing implementation...
