@@ -23,38 +23,33 @@ PlateTectonics::PlateTectonics()
     // Initialize with empty plates array
 }
 
-// Replace the original SimulateFrame method with this enhanced version
+// MODIFY the existing SimulateFrame method - don't add a new one
 void PlateTectonics::SimulateFrame(float deltaYears) {
     // Convert years to seconds for physics calculations
     const float deltaSeconds = deltaYears * 365.25f * 24.0f * 60.0f * 60.0f;
     
+    // Classify boundaries into convergent, divergent, and transform
+    ClassifyPlateBoundaries();
+    
     // Calculate forces from mantle convection using improved model
     CalculateImprovedMantleForces();
     
-    // Apply forces to plates and update velocities
-    for (auto& plate : plates) {
-        // Get force vector for this plate
-        ForceVector forceVec = mantleForcesWithDirection[plate.id];
-        
-        // Apply mantle force to angular velocity
-        float mantleForce = forceVec.magnitude;
-        plate.angularVelocity += mantleForce * deltaSeconds / (plate.thickness * plate.density);
-        
-        // Apply viscous drag from mantle (improved model)
-        // Viscous drag should be proportional to velocity and inversely proportional to viscosity
-        float dragCoefficient = 1.0f / mantleViscosity * 1e19f; // Scale factor for reasonable numbers
-        plate.angularVelocity *= (1.0f - dragCoefficient * deltaSeconds);
-    }
+    // Process different boundary types
+    ProcessSubductionZones(deltaSeconds);
+    ProcessSpreadingRidges(deltaSeconds);
+    ProcessTransformFaults(deltaSeconds);
+    ProcessContinentalCollisions(deltaSeconds);
     
-    // Resolve collisions between plates
-    std::vector<PlateCollision> collisions = DetectAllCollisions();
-    ResolveCollisions(collisions, deltaSeconds);
+    // Update plate angular momentum
+    UpdatePlateAngularMomentum(deltaSeconds);
+    
+    // Age plates
+    for (auto& plate : plates) {
+        plate.age += deltaYears;
+    }
     
     // Update simulation time
     simulationTime += deltaYears;
-    
-    // Update all convergent boundary locations to reflect mountain formation
-    UpdateConvergentBoundaries(deltaYears);
 }
 
 void PlateTectonics::CalculateMantleForces() {
@@ -583,6 +578,415 @@ float PlateTectonics::CalculateCellInfluence(float distance, const MantelCell& c
     float influence = std::exp(-normalizedDistance * 3.0f) * cell.strength;
     
     return influence * 1e15f; // Scale to appropriate magnitude
+}
+
+// Add this method to PlateTectonics.cpp
+void PlateTectonics::ProcessSubductionZones(float deltaSeconds) {
+    std::vector<BoundaryPoint> newSubductionPoints;
+    
+    // Process each convergent boundary
+    for (const auto& boundary : convergentBoundaries) {
+        if (boundary.divergenceRate >= 0) continue; // Skip non-convergent boundaries
+        
+        // Get the plates involved
+        int plate1Idx = -1, plate2Idx = -1;
+        for (size_t i = 0; i < plates.size(); i++) {
+            if (plates[i].id == boundary.plate1Id) plate1Idx = static_cast<int>(i);
+            if (plates[i].id == boundary.plate2Id) plate2Idx = static_cast<int>(i);
+        }
+        
+        if (plate1Idx < 0 || plate2Idx < 0) continue;
+        
+        // Determine which plate subducts (the denser one)
+        bool plate1Subducts = plates[plate1Idx].density > plates[plate2Idx].density;
+        int subductingIdx = plate1Subducts ? plate1Idx : plate2Idx;
+        int overridingIdx = plate1Subducts ? plate2Idx : plate1Idx;
+        
+        // Calculate subduction speed based on convergence rate and plate properties
+        float subductionSpeed = std::abs(boundary.divergenceRate) * 
+                               (plates[subductingIdx].density / 3000.0f);  // Normalized for typical density
+        
+        // Modify thickness of subducting plate (thinning at leading edge)
+        plates[subductingIdx].thickness *= (1.0f - 0.02f * deltaSeconds / (365.25f * 24.0f * 3600.0f));
+        
+        // Increases in density as plate subducts (metamorphism)
+        plates[subductingIdx].density += 5.0f * deltaSeconds / (365.25f * 24.0f * 3600.0f);
+        
+        // Create volcanic arc in overriding plate
+        // Distance from trench proportional to subduction angle (steeper = closer)
+        float arcDistance = 200.0f * (1.0f - plates[subductingIdx].density / 3500.0f);
+        
+        // Calculate arc position
+        Math::Vector3 toPlateCenter = (plates[overridingIdx].boundaries.size() >= 3) ?
+            Math::Vector3(plates[overridingIdx].boundaries[0], 
+                         plates[overridingIdx].boundaries[1], 
+                         plates[overridingIdx].boundaries[2]) - boundary.position :
+            Math::Vector3(0, 0, 1);
+        
+        toPlateCenter = toPlateCenter.normalized();
+        
+        // Volcanic arc position
+        Math::Vector3 arcPosition = boundary.position + toPlateCenter * arcDistance;
+        
+        // Calculate mountain height based on subduction duration
+        float mountainHeight = 500.0f + 5000.0f * (1.0f - std::exp(-boundary.age / 10000000.0f));
+        
+        // Calculate trench depth based on subducting plate age and density
+        float trenchDepth = -2000.0f - 8000.0f * (plates[subductingIdx].density - 3000.0f) / 500.0f 
+                          * (1.0f - std::exp(-plates[subductingIdx].age / 5000000.0f));
+        
+        // Add trench point
+        BoundaryPoint trenchPoint = boundary;
+        trenchPoint.height = trenchDepth;
+        trenchPoint.heightChange = -subductionSpeed * 0.01f; // Trench deepens with time
+        newSubductionPoints.push_back(trenchPoint);
+        
+        // Add volcanic arc point
+        BoundaryPoint arcPoint;
+        arcPoint.position = arcPosition;
+        arcPoint.height = mountainHeight;
+        arcPoint.heightChange = subductionSpeed * 0.02f; // Arc grows with time
+        arcPoint.plate1Id = boundary.plate1Id;
+        arcPoint.plate2Id = boundary.plate2Id;
+        arcPoint.divergenceRate = boundary.divergenceRate;
+        arcPoint.age = boundary.age;
+        newSubductionPoints.push_back(arcPoint);
+        
+        // Modify plate velocities based on slab pull and resistance
+        float slabPullForce = plates[subductingIdx].density * plates[subductingIdx].thickness * 9.8f * 0.01f;
+        float resistiveForce = mantleViscosity * subductionSpeed * 1e-20f;
+        
+        // Apply forces to angular velocity
+        plates[subductingIdx].angularVelocity += (slabPullForce - resistiveForce) * 
+                                              deltaSeconds / (plates[subductingIdx].thickness * plates[subductingIdx].density);
+        
+        // Overriding plate gets pushed/pulled depending on coupling
+        float couplingFactor = 0.2f; // 20% of slab force transfers to overriding plate
+        plates[overridingIdx].angularVelocity += slabPullForce * couplingFactor * 
+                                              deltaSeconds / (plates[overridingIdx].thickness * plates[overridingIdx].density);
+    }
+    
+    // Update convergent boundaries with new points
+    convergentBoundaries = newSubductionPoints;
+}
+
+// Add to PlateTectonics.cpp
+void PlateTectonics::ProcessSpreadingRidges(float deltaSeconds) {
+    std::vector<BoundaryPoint> newDivergentPoints;
+    
+    // Process each divergent boundary
+    for (const auto& boundary : divergentBoundaries) {
+        if (boundary.divergenceRate <= 0) continue; // Skip non-divergent boundaries
+        
+        // Get the plates involved
+        int plate1Idx = -1, plate2Idx = -1;
+        for (size_t i = 0; i < plates.size(); i++) {
+            if (plates[i].id == boundary.plate1Id) plate1Idx = static_cast<int>(i);
+            if (plates[i].id == boundary.plate2Id) plate2Idx = static_cast<int>(i);
+        }
+        
+        if (plate1Idx < 0 || plate2Idx < 0) continue;
+        
+        // Calculate spreading rate based on boundary divergence rate
+        float spreadingRate = boundary.divergenceRate;
+        
+        // Create new oceanic crust at the spreading center
+        // Both plates get thinner near the boundary (conservation of mass)
+        float crustFormationRate = spreadingRate * 0.01f * deltaSeconds / (365.25f * 24.0f * 3600.0f);
+        
+        // Ridge elevation based on thermal expansion of new crust
+        float ridgeElevation = -2000.0f + 2500.0f * std::exp(-boundary.age / 2000000.0f);
+        
+        // Update boundary point
+        BoundaryPoint updatedPoint = boundary;
+        updatedPoint.height = ridgeElevation;
+        updatedPoint.heightChange = -0.5f * spreadingRate * 0.001f; // Ridge subsides as it cools
+        updatedPoint.age += deltaSeconds;
+        newDivergentPoints.push_back(updatedPoint);
+        
+        // Create flanking bathymetry (ocean floor getting deeper with age)
+        for (int side = -1; side <= 1; side += 2) {
+            if (side == 0) continue;
+            
+            // Skip center point
+            for (int distanceStep = 1; distanceStep <= 5; distanceStep++) {
+                float distance = distanceStep * 50000.0f; // 50km steps
+                
+                // Compute point on ridge flank
+                // This is simplified - real implementation would calculate actual geodesic offset
+                Math::Vector3 flankDir = boundary.position.cross(Math::Vector3(0, 0, 1)).normalized();
+                if (side < 0) flankDir = flankDir * -1.0f;
+                
+                Math::Vector3 flankPos = boundary.position + flankDir * (distance / 6371000.0f); // Normalized by Earth radius
+                flankPos = flankPos.normalized() * 6371000.0f; // Back to Earth radius
+                
+                // Age of crust increases with distance from ridge
+                float crustAge = distance / spreadingRate;
+                
+                // GDH1 model for ocean floor depth vs age
+                float depth = -2500.0f - 350.0f * std::sqrt(crustAge / 1000000.0f);
+                
+                // Create a boundary point for this section of seafloor
+                BoundaryPoint seafloorPoint;
+                seafloorPoint.position = flankPos;
+                seafloorPoint.height = depth;
+                seafloorPoint.heightChange = -0.1f * spreadingRate * 0.001f; // Slower subsidence with age
+                seafloorPoint.plate1Id = (side < 0) ? boundary.plate1Id : boundary.plate2Id;
+                seafloorPoint.plate2Id = -1; // Not a plate boundary
+                seafloorPoint.divergenceRate = 0;
+                seafloorPoint.age = crustAge;
+                
+                newDivergentPoints.push_back(seafloorPoint);
+            }
+        }
+        
+        // Apply ridge push force to plates
+        float ridgePushForce = 2.0f * mantleViscosity * spreadingRate * 1e-19f;
+        
+        // Ridge push acts in opposite directions for each plate
+        plates[plate1Idx].angularVelocity += ridgePushForce * 
+                                          deltaSeconds / (plates[plate1Idx].thickness * plates[plate1Idx].density);
+        plates[plate2Idx].angularVelocity -= ridgePushForce * 
+                                          deltaSeconds / (plates[plate2Idx].thickness * plates[plate2Idx].density);
+                                          
+        // Make oceanic plates get thinner with spreading (conservation of mass)
+        if (plates[plate1Idx].isOceanic) {
+            plates[plate1Idx].thickness *= (1.0f - 0.005f * crustFormationRate);
+        }
+        if (plates[plate2Idx].isOceanic) {
+            plates[plate2Idx].thickness *= (1.0f - 0.005f * crustFormationRate);
+        }
+    }
+    
+    // Update divergent boundaries with new points
+    divergentBoundaries = newDivergentPoints;
+}
+
+// Add to PlateTectonics.cpp
+void PlateTectonics::ProcessContinentalCollisions(float deltaSeconds) {
+    std::vector<BoundaryPoint> newCollisionPoints;
+    
+    // Process each convergent boundary between continental plates
+    for (const auto& boundary : convergentBoundaries) {
+        if (boundary.divergenceRate >= 0) continue; // Skip non-convergent boundaries
+        
+        // Get the plates involved
+        int plate1Idx = -1, plate2Idx = -1;
+        for (size_t i = 0; i < plates.size(); i++) {
+            if (plates[i].id == boundary.plate1Id) plate1Idx = static_cast<int>(i);
+            if (plates[i].id == boundary.plate2Id) plate2Idx = static_cast<int>(i);
+        }
+        
+        if (plate1Idx < 0 || plate2Idx < 0) continue;
+        
+        // Skip if either plate is oceanic (handled by subduction)
+        if (plates[plate1Idx].isOceanic || plates[plate2Idx].isOceanic) continue;
+        
+        // Calculate collision intensity from convergence rate
+        float collisionRate = std::abs(boundary.divergenceRate);
+        
+        // Both continental plates thicken at collision zone
+        float thickeningRate = collisionRate * 0.02f * deltaSeconds / (365.25f * 24.0f * 3600.0f);
+        plates[plate1Idx].thickness *= (1.0f + thickeningRate * 0.5f);
+        plates[plate2Idx].thickness *= (1.0f + thickeningRate * 0.5f);
+        
+        // Calculate mountain height based on:
+        // 1. Collision duration (boundary age)
+        // 2. Thickness of the colliding plates
+        // 3. Collision rate
+        // 4. Isostatic compensation (buoyancy)
+        
+        float combinedThickness = plates[plate1Idx].thickness + plates[plate2Idx].thickness;
+        float collisionDuration = boundary.age;
+        float buoyancyFactor = (3300.0f - plates[plate1Idx].density) / 600.0f + 
+                              (3300.0f - plates[plate2Idx].density) / 600.0f;
+        
+        // S-curve growth function for mountains
+        float maxHeight = 5000.0f + combinedThickness * 20.0f * buoyancyFactor;
+        float growthRate = collisionRate * 0.2f;
+        float halfTime = 10000000.0f; // 10 million years to reach half height
+        float currentHeight = maxHeight / (1.0f + std::exp(-(collisionDuration - halfTime) * growthRate / halfTime));
+        
+        // Rate of height change
+        float heightChange = maxHeight * growthRate * std::exp(-(collisionDuration - halfTime) * growthRate / halfTime) /
+                           (1.0f + std::exp(-(collisionDuration - halfTime) * growthRate / halfTime)) / 
+                           (1.0f + std::exp(-(collisionDuration - halfTime) * growthRate / halfTime));
+        
+        // Apply height changes to collision boundary
+        BoundaryPoint updatedPoint = boundary;
+        updatedPoint.height = currentHeight;
+        updatedPoint.heightChange = heightChange;
+        updatedPoint.age += deltaSeconds;
+        newCollisionPoints.push_back(updatedPoint);
+        
+        // Create a mountain range with multiple peaks
+        const int RANGE_WIDTH = 5;
+        for (int offset = -RANGE_WIDTH; offset <= RANGE_WIDTH; offset++) {
+            if (offset == 0) continue; // Center point already added
+            
+            // Calculate offset position along collision boundary
+            // This is simplified - real implementation would follow actual boundary geometry
+            Math::Vector3 offsetDir = boundary.position.cross(Math::Vector3(0, 1, 0)).normalized();
+            float offsetDist = offset * 50000.0f; // 50km between mountain peaks
+            
+            Math::Vector3 peakPos = boundary.position + offsetDir * (offsetDist / 6371000.0f);
+            peakPos = peakPos.normalized() * 6371000.0f;
+            
+            // Height varies along range - slightly lower than central peak
+            float peakHeightFactor = 1.0f - 0.1f * std::abs(offset) / RANGE_WIDTH;
+            float peakHeight = currentHeight * peakHeightFactor;
+            
+            // Add mountain peak
+            BoundaryPoint peakPoint;
+            peakPoint.position = peakPos;
+            peakPoint.height = peakHeight;
+            peakPoint.heightChange = heightChange * peakHeightFactor;
+            peakPoint.plate1Id = boundary.plate1Id;
+            peakPoint.plate2Id = boundary.plate2Id;
+            peakPoint.divergenceRate = boundary.divergenceRate;
+            peakPoint.age = boundary.age;
+            
+            newCollisionPoints.push_back(peakPoint);
+        }
+        
+        // Continental collision slows down both plates (high resistance)
+        float resistiveForce = mantleViscosity * collisionRate * 1e-18f;
+        
+        plates[plate1Idx].angularVelocity *= (1.0f - resistiveForce * 
+                                          deltaSeconds / (plates[plate1Idx].thickness * plates[plate1Idx].density));
+        plates[plate2Idx].angularVelocity *= (1.0f - resistiveForce * 
+                                          deltaSeconds / (plates[plate2Idx].thickness * plates[plate2Idx].density));
+    }
+    
+    // Add new collision points to the convergent boundaries list
+    convergentBoundaries.insert(convergentBoundaries.end(), newCollisionPoints.begin(), newCollisionPoints.end());
+}
+
+void PlateTectonics::ClassifyPlateBoundaries() {
+    // Clear previous boundary classifications
+    divergentBoundaries.clear();
+    transformBoundaries.clear();
+    
+    // Reclassify convergent boundaries
+    std::vector<BoundaryPoint> newConvergentBoundaries;
+    
+    // Detect all collisions
+    std::vector<PlateCollision> collisions = DetectAllCollisions();
+    
+    // For each collision, create appropriate boundary points
+    for (const auto& collision : collisions) {
+        // Ensure indices are valid
+        if (collision.plate1Index < 0 || collision.plate1Index >= static_cast<int>(plates.size()) ||
+            collision.plate2Index < 0 || collision.plate2Index >= static_cast<int>(plates.size())) {
+            continue;
+        }
+        
+        const Plate& plate1 = plates[collision.plate1Index];
+        const Plate& plate2 = plates[collision.plate2Index];
+        
+        // Calculate relative velocity
+        float relativeVelocity = plate1.angularVelocity - plate2.angularVelocity;
+        
+        // Process each collision point
+        for (const auto& point : collision.points) {
+            BoundaryPoint boundary;
+            boundary.position = point;
+            boundary.plate1Id = plate1.id;
+            boundary.plate2Id = plate2.id;
+            boundary.age = 0; // New boundary point
+            
+            // Classify based on relative motion
+            if (std::abs(relativeVelocity) < 0.00001f) {
+                // Transform boundary
+                boundary.divergenceRate = 0;
+                boundary.slipRate = 0.01f; // Small default value
+                boundary.height = 0;
+                boundary.heightChange = 0;
+                transformBoundaries.push_back(boundary);
+            }
+            else if (relativeVelocity > 0) {
+                // Convergent boundary
+                boundary.divergenceRate = -relativeVelocity * 1000.0f * 31536000.0f; // Convert to mm/year
+                boundary.slipRate = 0;
+                
+                // Initial height depends on plate types
+                if (plate1.isOceanic && plate2.isOceanic) {
+                    // Ocean-ocean: depends on age difference
+                    float ageDiff = std::abs(plate1.age - plate2.age);
+                    boundary.height = -4000.0f - 2000.0f * (ageDiff / 100000000.0f);
+                }
+                else if (!plate1.isOceanic && !plate2.isOceanic) {
+                    // Continent-continent: initial low mountain
+                    boundary.height = 500.0f;
+                }
+                else {
+                    // Ocean-continent: initial trench
+                    boundary.height = -3000.0f;
+                }
+                
+                // Height change rate proportional to convergence
+                boundary.heightChange = std::abs(relativeVelocity) * 100.0f;
+                
+                newConvergentBoundaries.push_back(boundary);
+            }
+            else {
+                // Divergent boundary
+                boundary.divergenceRate = -relativeVelocity * 1000.0f * 31536000.0f; // Convert to mm/year (positive for divergent)
+                boundary.slipRate = 0;
+                
+                // New divergent boundaries start slightly below sea level
+                boundary.height = -2500.0f;
+                boundary.heightChange = 0;
+                
+                divergentBoundaries.push_back(boundary);
+            }
+        }
+    }
+    
+    // Keep existing convergent boundaries and add newly detected ones
+    for (auto& boundary : convergentBoundaries) {
+        // Age existing boundaries
+        boundary.age += 100000; // Approximately 100,000 years between simulation frames
+    }
+    
+    // Add new boundaries to the list
+    convergentBoundaries.insert(convergentBoundaries.end(), 
+                              newConvergentBoundaries.begin(), 
+                              newConvergentBoundaries.end());
+}
+
+// Add this to PlateTectonics.cpp
+void PlateTectonics::UpdatePlateAngularMomentum(float deltaSeconds) {
+    // Apply forces to plates and update velocities
+    for (auto& plate : plates) {
+        // Get force vector for this plate (with safety check)
+        if (mantleForcesWithDirection.find(plate.id) != mantleForcesWithDirection.end()) {
+            ForceVector forceVec = mantleForcesWithDirection[plate.id];
+            
+            // Apply mantle force to angular velocity
+            float mantleForce = forceVec.magnitude;
+            plate.angularVelocity += mantleForce * deltaSeconds / (plate.thickness * plate.density);
+        }
+        
+        // Apply viscous drag from mantle
+        float dragCoefficient = 1.0f / mantleViscosity * 1e19f; // Scale factor
+        plate.angularVelocity *= (1.0f - dragCoefficient * deltaSeconds);
+    }
+}
+
+// Add this to PlateTectonics.cpp too
+void PlateTectonics::ProcessTransformFaults(float deltaSeconds) {
+    // Simple implementation for transform faults
+    for (auto& boundary : transformBoundaries) {
+        // Transform faults mostly just slide past each other with minimal elevation changes
+        boundary.height *= 0.99f; // Gradual erosion of any elevated features
+        
+        // Minor changes to position based on slip rate
+        // In a real implementation, this would involve complex lateral movements
+        
+        // Age the boundary
+        boundary.age += deltaSeconds;
+    }
 }
 } // namespace Simulation
 } // namespace AeonTerra

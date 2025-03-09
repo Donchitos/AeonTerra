@@ -98,54 +98,106 @@ void PlateGenerator::generateEarthLikePlates(int plateCount, float planetRadius,
 }
 
 void PlateGenerator::createFractureNetwork(float planetRadius) {
-    // Create an initial "cracked egg" pattern of fractures on the sphere
+    // Start with a small number of initial cracks
+    int initialCracks = static_cast<int>(m_plateCount * 0.5f);
     
-    // Number of initial fractures scales with plate count
-    int fracturesToCreate = m_plateCount * 3; // More fractures than plates for realistic fragmentation
-    
-    for (int i = 0; i < fracturesToCreate; i++) {
-        // Create a random fracture on the sphere
+    // Create initial "seed" fractures
+    for (int i = 0; i < initialCracks; i++) {
         Math::Vector3 startPoint = Math::GeoMath::randomUnitVector(m_engine);
-        
-        // Random direction for fracture propagation
         Math::Vector3 randomDir = Math::GeoMath::randomUnitVector(m_engine);
         Math::Vector3 perpDir = startPoint.cross(randomDir).normalized();
         
-        // Fracture length varies (in radians, on unit sphere)
-        float fracLength = std::uniform_real_distribution<float>(0.2f, 0.8f)(m_engine);
-        
-        // Fracture endpoint
+        // Initial fracture length 
+        float fracLength = std::uniform_real_distribution<float>(0.2f, 0.5f)(m_engine);
         Math::Vector3 endPoint = (startPoint * std::cos(fracLength) + 
-                                 perpDir * std::sin(fracLength)).normalized();
+                                perpDir * std::sin(fracLength)).normalized();
         
-        // Random width and depth
-        float width = std::uniform_real_distribution<float>(0.01f, 0.1f)(m_engine);
-        float depth = std::uniform_real_distribution<float>(10.0f, 50.0f)(m_engine);
-        
-        // Add fracture
+        // Create initial fracture
         m_fractures.push_back({
             startPoint * planetRadius,
             endPoint * planetRadius, 
-            width, 
-            depth
+            std::uniform_real_distribution<float>(0.02f, 0.08f)(m_engine),  // Width
+            std::uniform_real_distribution<float>(15.0f, 40.0f)(m_engine)   // Depth
         });
     }
     
-    // Add irregularity to fractures
-    if (m_params.irregularity > 0) {
-        // Apply fractal perturbations to make fractures more irregular
-        for (auto& fracture : m_fractures) {
-            // Displace endpoints slightly
-            fracture.start += Math::GeoMath::randomUnitVector(m_engine) * 
-                             (m_params.irregularity * planetRadius * 0.05f);
-            fracture.end += Math::GeoMath::randomUnitVector(m_engine) * 
-                           (m_params.irregularity * planetRadius * 0.05f);
+    // Propagate fractures using a stress-based system
+    const int PROPAGATION_STEPS = m_plateCount * 2;
+    
+    for (int step = 0; step < PROPAGATION_STEPS; step++) {
+        // Choose a random existing fracture to propagate from
+        if (m_fractures.empty()) break;
+        
+        int fracIndex = std::uniform_int_distribution<int>(0, static_cast<int>(m_fractures.size()) - 1)(m_engine);
+        Fracture& fracture = m_fractures[fracIndex];
+        
+        // Decide which end to propagate from
+        bool fromStart = std::uniform_real_distribution<float>(0.0f, 1.0f)(m_engine) < 0.5f;
+        Math::Vector3 propPoint = fromStart ? fracture.start : fracture.end;
+        Math::Vector3 dirVector = fromStart ? (fracture.start - fracture.end).normalized() : 
+                                            (fracture.end - fracture.start).normalized();
+        
+        // Calculate stress field direction (perpendicular to current direction with some randomness)
+        Math::Vector3 stressDir = propPoint.cross(dirVector).normalized();
+        
+        // Add randomization based on irregularity parameter
+        stressDir = (stressDir + Math::GeoMath::randomUnitVector(m_engine) * m_params.irregularity).normalized();
+        
+        // New propagation direction (follows stress field with some influence from original direction)
+        Math::Vector3 newDir = (stressDir * 0.8f + dirVector * 0.2f).normalized();
+        
+        // Length of new segment varies based on step (shorter as we progress)
+        float newLength = std::uniform_real_distribution<float>(
+            0.1f, 0.3f * (1.0f - static_cast<float>(step) / PROPAGATION_STEPS))(m_engine);
             
-            // Normalize back to sphere surface
-            fracture.start = fracture.start.normalized() * planetRadius;
-            fracture.end = fracture.end.normalized() * planetRadius;
+        // Calculate new endpoint
+        Math::Vector3 newEndPoint = (propPoint.normalized() * std::cos(newLength) + 
+                                   newDir * std::sin(newLength)).normalized() * planetRadius;
+        
+        // Check for intersection with existing fractures
+        bool intersects = false;
+        for (const auto& f : m_fractures) {
+            if (lineSegmentsIntersect(propPoint, newEndPoint, f.start, f.end)) {
+                intersects = true;
+                break;
+            }
+        }
+        
+        // Only add if no intersection found
+        if (!intersects) {
+            // Width and depth change slightly from parent fracture
+            float width = fracture.width * std::uniform_real_distribution<float>(0.8f, 1.2f)(m_engine);
+            float depth = fracture.depth * std::uniform_real_distribution<float>(0.7f, 1.1f)(m_engine);
+            
+            // Add new fracture segment
+            m_fractures.push_back({propPoint, newEndPoint, width, depth});
+            
+            // Sometimes branch in another direction too (creates realistic fracture networks)
+            if (std::uniform_real_distribution<float>(0.0f, 1.0f)(m_engine) < 0.3f) {
+                // Branch direction is more perpendicular to propagation direction
+                Math::Vector3 branchDir = propPoint.cross(newDir).normalized();
+                branchDir = (branchDir + Math::GeoMath::randomUnitVector(m_engine) * 0.3f).normalized();
+                
+                // Branch length is typically shorter
+                float branchLength = newLength * std::uniform_real_distribution<float>(0.5f, 0.8f)(m_engine);
+                
+                // Calculate branch endpoint
+                Math::Vector3 branchEndPoint = (propPoint.normalized() * std::cos(branchLength) + 
+                                              branchDir * std::sin(branchLength)).normalized() * planetRadius;
+                
+                // Add branch fracture with slightly different properties
+                m_fractures.push_back({
+                    propPoint, 
+                    branchEndPoint, 
+                    width * std::uniform_real_distribution<float>(0.6f, 0.9f)(m_engine),
+                    depth * std::uniform_real_distribution<float>(0.7f, 0.9f)(m_engine)
+                });
+            }
         }
     }
+    
+    // Apply final irregularity pass
+    applyFractalPerturbations();
 }
 
 void PlateGenerator::growPlatesFromFractures(int plateCount) {
@@ -630,6 +682,48 @@ std::vector<Simulation::PlateTectonics::Plate> PlateGenerator::convertToTectonic
         tectonicPlates.push_back(tectonicPlate);
     }
     return tectonicPlates;
+}
+
+// Add this to PlateGenerator.cpp
+void PlateGenerator::applyFractalPerturbations() {
+    // Apply fractal noise to make fractures and plate boundaries more irregular
+    for (auto& fracture : m_fractures) {
+        // Midpoint displacement algorithm to add irregularity
+        
+        // Start with original endpoints
+        Math::Vector3 start = fracture.start;
+        Math::Vector3 end = fracture.end;
+        
+        // Apply small random perturbations
+        fracture.start += Math::GeoMath::randomUnitVector(m_engine) * 
+                         (m_params.irregularity * m_planetRadius * 0.02f);
+        fracture.end += Math::GeoMath::randomUnitVector(m_engine) * 
+                       (m_params.irregularity * m_planetRadius * 0.02f);
+        
+        // Normalize back to sphere surface
+        fracture.start = fracture.start.normalized() * m_planetRadius;
+        fracture.end = fracture.end.normalized() * m_planetRadius;
+    }
+    
+    // Also add some irregular perturbations to plate boundaries
+    for (auto& plate : m_plates) {
+        for (auto& boundary : plate.boundaries) {
+            // Add small random perturbations to theta and phi
+            float thetaPerturb = std::uniform_real_distribution<float>(
+                -0.05f * m_params.irregularity, 
+                0.05f * m_params.irregularity)(m_engine);
+                
+            float phiPerturb = std::uniform_real_distribution<float>(
+                -0.05f * m_params.irregularity, 
+                0.05f * m_params.irregularity)(m_engine);
+                
+            boundary.theta += thetaPerturb;
+            boundary.phi += phiPerturb;
+            
+            // Keep theta within valid range [0, π]
+            boundary.theta = std::max(0.01f, std::min(static_cast<float>(M_PI) - 0.01f, boundary.theta));
+        }
+    }
 }
 
 } // namespace Tools
