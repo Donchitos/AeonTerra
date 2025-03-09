@@ -10,6 +10,11 @@ option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 # Define global export macro for static build
 add_compile_definitions(AEONTERRA_CORE_STATIC)
 
+# Add definition for PI constants on MSVC
+if(MSVC)
+    add_compile_definitions(_USE_MATH_DEFINES)
+endif()
+
 # Enable OpenMP for parallel processing if available
 find_package(OpenMP)
 if(OpenMP_CXX_FOUND)
@@ -24,14 +29,26 @@ add_subdirectory(Tools)
 add_executable(AeonTerraTest Main.cpp)
 target_link_libraries(AeonTerraTest PRIVATE Core Tools)
 
+# Add our planet simulator application
+add_executable(PlanetSimulator PlanetSimulator.cpp)
+target_link_libraries(PlanetSimulator PRIVATE Core Tools)
+
 # If this is a Windows build, set the subsystem to console
 if(WIN32)
     set_target_properties(AeonTerraTest PROPERTIES
         WIN32_EXECUTABLE FALSE
     )
+    set_target_properties(PlanetSimulator PROPERTIES
+        WIN32_EXECUTABLE FALSE
+    )
+endif()
+
+# Ensure we use C++17 filesystem library
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9.0)
+    target_link_libraries(PlanetSimulator PRIVATE stdc++fs)
 endif()
 
 # Install rules
-install(TARGETS AeonTerraTest
+install(TARGETS AeonTerraTest PlanetSimulator
     RUNTIME DESTINATION bin
 )

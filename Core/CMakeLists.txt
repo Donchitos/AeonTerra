@@ -15,6 +15,9 @@ add_library(Core STATIC ${CORE_HEADERS} ${CORE_SOURCES})
 # Configure export macros for Windows DLLs
 if(WIN32)
     target_compile_definitions(Core PRIVATE AEONTERRA_CORE_EXPORTS)
+    
+    # Define M_PI for MSVC which doesn't include it by default
+    target_compile_definitions(Core PRIVATE _USE_MATH_DEFINES)
 endif()
 
 # Properly expose public headers to dependent projects
