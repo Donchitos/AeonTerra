@@ -4,14 +4,13 @@ set(CORE_HEADERS
     Mathematics/Vector3.h
     Mathematics/GeoMath.h
     Simulation/PlateTectonics.h
-    Simulation/PlateTectonics.cpp
 )
 
 set(CORE_SOURCES
-    ${CORE_HEADERS}
+    Simulation/PlateTectonics.cpp
 )
 
-add_library(Core STATIC ${CORE_SOURCES})
+add_library(Core STATIC ${CORE_HEADERS} ${CORE_SOURCES})
 
 # Configure export macros for Windows DLLs
 if(WIN32)
@@ -22,4 +21,5 @@ endif()
 target_include_directories(Core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     $<INSTALL_INTERFACE:include>
+    ${CMAKE_SOURCE_DIR}  # Add root directory to include path
 )

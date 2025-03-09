@@ -1,4 +1,11 @@
-﻿file(GLOB_RECURSE TOOLS_SOURCES "WorldBuilder/*.cpp" "WorldBuilder/*.h")
+﻿# Define tool sources explicitly
+set(TOOLS_SOURCES
+    WorldBuilder/PlateGenerator.cpp
+    WorldBuilder/PlateGenerator.h
+    HeightmapGenerator.cpp
+    HeightmapGenerator.h
+)
+
 add_library(Tools STATIC ${TOOLS_SOURCES})
 
 # Add STATIC definition to match Core
