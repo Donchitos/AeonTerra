@@ -44,7 +44,9 @@ public:
                 tectonicPlate.boundaries.push_back(boundary.phi);
             }
             
-            tectonicPlate.angularVelocity = 0.01f; // Default value, adjust as needed
+            // Calculate angular velocity based on plate movement characteristics
+            // Using m_planetRadius (class member) instead of planetRadius (which was undefined)
+            tectonicPlate.angularVelocity = plate.velocity.length() / (m_planetRadius * 1000.0f); // Convert km to meters
             tectonicPlate.thickness = plate.thickness;
             tectonicPlate.density = plate.density;
             

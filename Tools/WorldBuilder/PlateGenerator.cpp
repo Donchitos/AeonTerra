@@ -20,6 +20,7 @@ PlateGenerator::PlateGenerator(uint32_t seed)
       m_plates() {}
 
 void PlateGenerator::generatePlates(int plateCount, float planetRadius) {
+    m_planetRadius = planetRadius; // Store for angular velocity calculation
     if(plateCount < 1 || planetRadius <= 0) {
         throw std::invalid_argument("Invalid plate generation parameters");
     }
