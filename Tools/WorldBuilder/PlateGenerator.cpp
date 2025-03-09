@@ -4,6 +4,8 @@
 #include <random>
 #include <cmath>
 #include <algorithm>
+#include <queue>
+#include <unordered_set>
 
 // Define M_PI if not available
 #ifndef M_PI
@@ -17,10 +19,18 @@ PlateGenerator::PlateGenerator(uint32_t seed)
     : m_engine(seed),
       m_plateCount(0),
       m_planetRadius(6371.0f),
-      m_plates() {}
+      m_plates() {
+    // Initialize default generation parameters
+    m_params.continentalPercent = 0.3f;
+    m_params.maxFragmentation = 0.7f;
+    m_params.irregularity = 0.65f;
+    m_params.hotspotDensity = 0.0002f;
+    m_params.includeHotspots = true;
+}
 
+// Original plate generation (kept for compatibility)
 void PlateGenerator::generatePlates(int plateCount, float planetRadius) {
-    m_planetRadius = planetRadius; // Store for angular velocity calculation
+    m_planetRadius = planetRadius; 
     if(plateCount < 1 || planetRadius <= 0) {
         throw std::invalid_argument("Invalid plate generation parameters");
     }
@@ -49,11 +59,449 @@ void PlateGenerator::generatePlates(int plateCount, float planetRadius) {
         std::uniform_real_distribution<float> densityDist(2700.0f, 3300.0f); // kg/m³
         plate.thickness = thicknessDist(m_engine);
         plate.density = densityDist(m_engine);
+        plate.isOceanic = (plate.density > 3000.0f);
+        plate.age = std::uniform_real_distribution<float>(0.0f, 200.0f)(m_engine);
         
         m_plates.push_back(plate);
     }
 
     CreateVoronoiCells(m_plates, planetRadius);
+}
+
+// New Earth-like plate generation
+void PlateGenerator::generateEarthLikePlates(int plateCount, float planetRadius, bool startWithPangea) {
+    m_planetRadius = planetRadius;
+    m_plateCount = plateCount;
+    m_plates.clear();
+    m_fractures.clear();
+    m_hotspots.clear();
+    
+    // Step 1: Create fracture network that will form plate boundaries
+    createFractureNetwork(planetRadius);
+    
+    // Step 2: Grow plates from fractures to form realistic plate shapes
+    growPlatesFromFractures(plateCount);
+    
+    // Step 3: Assign realistic properties to plates
+    assignPlateProperties(startWithPangea);
+    
+    // Step 4: Create weak zones (potential future boundaries)
+    createWeakZones();
+    
+    // Step 5: Balance continental and oceanic crust distribution
+    balanceCrustTypes(m_params.continentalPercent);
+    
+    // Step 6: Add hotspots if enabled
+    if (m_params.includeHotspots) {
+        createHotspots();
+    }
+}
+
+void PlateGenerator::createFractureNetwork(float planetRadius) {
+    // Create an initial "cracked egg" pattern of fractures on the sphere
+    
+    // Number of initial fractures scales with plate count
+    int fracturesToCreate = m_plateCount * 3; // More fractures than plates for realistic fragmentation
+    
+    for (int i = 0; i < fracturesToCreate; i++) {
+        // Create a random fracture on the sphere
+        Math::Vector3 startPoint = Math::GeoMath::randomUnitVector(m_engine);
+        
+        // Random direction for fracture propagation
+        Math::Vector3 randomDir = Math::GeoMath::randomUnitVector(m_engine);
+        Math::Vector3 perpDir = startPoint.cross(randomDir).normalized();
+        
+        // Fracture length varies (in radians, on unit sphere)
+        float fracLength = std::uniform_real_distribution<float>(0.2f, 0.8f)(m_engine);
+        
+        // Fracture endpoint
+        Math::Vector3 endPoint = (startPoint * std::cos(fracLength) + 
+                                 perpDir * std::sin(fracLength)).normalized();
+        
+        // Random width and depth
+        float width = std::uniform_real_distribution<float>(0.01f, 0.1f)(m_engine);
+        float depth = std::uniform_real_distribution<float>(10.0f, 50.0f)(m_engine);
+        
+        // Add fracture
+        m_fractures.push_back({
+            startPoint * planetRadius,
+            endPoint * planetRadius, 
+            width, 
+            depth
+        });
+    }
+    
+    // Add irregularity to fractures
+    if (m_params.irregularity > 0) {
+        // Apply fractal perturbations to make fractures more irregular
+        for (auto& fracture : m_fractures) {
+            // Displace endpoints slightly
+            fracture.start += Math::GeoMath::randomUnitVector(m_engine) * 
+                             (m_params.irregularity * planetRadius * 0.05f);
+            fracture.end += Math::GeoMath::randomUnitVector(m_engine) * 
+                           (m_params.irregularity * planetRadius * 0.05f);
+            
+            // Normalize back to sphere surface
+            fracture.start = fracture.start.normalized() * planetRadius;
+            fracture.end = fracture.end.normalized() * planetRadius;
+        }
+    }
+}
+
+void PlateGenerator::growPlatesFromFractures(int plateCount) {
+    // Use the fracture network to define plate boundaries
+    // This is a simplified version - in a real implementation, you'd use
+    // a more sophisticated algorithm to grow regions
+    
+    // First, choose seed points for each plate that are away from fractures
+    std::vector<Math::Vector3> seedPoints;
+    
+    const int MAX_ATTEMPTS = 1000;
+    
+    while (seedPoints.size() < plateCount && seedPoints.size() < MAX_ATTEMPTS) {
+        Math::Vector3 candidate = Math::GeoMath::randomUnitVector(m_engine) * m_planetRadius;
+        
+        // Check if candidate is far enough from all fractures
+        bool farEnough = true;
+        for (const auto& fracture : m_fractures) {
+            float distToFracture = distancePointToLineSegment(
+                candidate, fracture.start, fracture.end);
+            
+            if (distToFracture < fracture.width * m_planetRadius * 2.0f) {
+                farEnough = false;
+                break;
+            }
+        }
+        
+        if (farEnough) {
+            // Make sure it's also not too close to other seeds
+            for (const auto& existing : seedPoints) {
+                if ((existing - candidate).length() < m_planetRadius * 0.3f) {
+                    farEnough = false;
+                    break;
+                }
+            }
+        }
+        
+        if (farEnough) {
+            seedPoints.push_back(candidate);
+        }
+    }
+    
+    // Create plates from seed points
+    for (int i = 0; i < seedPoints.size(); i++) {
+        Plate plate;
+        plate.id = i;
+        plate.center = seedPoints[i];
+        m_plates.push_back(plate);
+    }
+    
+    // Now create boundaries for each plate
+    // In a real implementation, this would be a complex nearest-fracture algorithm
+    // This simplified version creates rough boundaries
+    const int BOUNDARY_POINTS = 200;
+    
+    for (auto& plate : m_plates) {
+        // Sample points on sphere
+        for (int i = 0; i < BOUNDARY_POINTS; i++) {
+            // Create a boundary point
+            float theta = std::uniform_real_distribution<float>(0.0f, static_cast<float>(M_PI))(m_engine);
+            float phi = std::uniform_real_distribution<float>(0.0f, static_cast<float>(2*M_PI))(m_engine);
+            
+            Math::SphericalCoord boundaryPoint = {
+                m_planetRadius,
+                theta,
+                phi
+            };
+            
+            // Convert to cartesian to check which plate this belongs to
+            Math::Vector3 cartPoint(
+                boundaryPoint.radius * std::sin(boundaryPoint.theta) * std::cos(boundaryPoint.phi),
+                boundaryPoint.radius * std::sin(boundaryPoint.theta) * std::sin(boundaryPoint.phi),
+                boundaryPoint.radius * std::cos(boundaryPoint.theta)
+            );
+            
+            // Find the closest seed point, but also consider fractures
+            int closestPlateId = -1;
+            float minDistance = std::numeric_limits<float>::max();
+            
+            for (const auto& otherPlate : m_plates) {
+                float dist = (cartPoint - otherPlate.center).length();
+                
+                // Check if there's a fracture between this point and the plate center
+                bool fractureInBetween = false;
+                for (const auto& fracture : m_fractures) {
+                    // Simplified check - in reality this is more complex
+                    if (lineSegmentsIntersect(
+                            cartPoint, otherPlate.center,
+                            fracture.start, fracture.end)) {
+                        fractureInBetween = true;
+                        break;
+                    }
+                }
+                
+                // If there's no fracture in between and it's closer
+                if (!fractureInBetween && dist < minDistance) {
+                    minDistance = dist;
+                    closestPlateId = otherPlate.id;
+                }
+            }
+            
+            // Add this point to the correct plate
+            if (closestPlateId == plate.id) {
+                plate.boundaries.push_back(boundaryPoint);
+            }
+        }
+    }
+}
+
+float PlateGenerator::getRandomContinentalThickness() {
+    return std::uniform_real_distribution<float>(70.0f, 100.0f)(m_engine);
+}
+
+float PlateGenerator::getRandomOceanicThickness() {
+    return std::uniform_real_distribution<float>(30.0f, 60.0f)(m_engine);
+}
+
+float PlateGenerator::getRandomContinentalDensity() {
+    return std::uniform_real_distribution<float>(2700.0f, 2900.0f)(m_engine);
+}
+
+float PlateGenerator::getRandomOceanicDensity() {
+    return std::uniform_real_distribution<float>(3000.0f, 3300.0f)(m_engine);
+}
+
+void PlateGenerator::assignPlateProperties(bool pangea) {
+    // Assign realistic properties to plates
+    
+    // Calculate cluster center for Pangea (if enabled)
+    Math::Vector3 pangeaCenter;
+    if (pangea) {
+        pangeaCenter = Math::GeoMath::randomUnitVector(m_engine) * m_planetRadius;
+    }
+    
+    for (auto& plate : m_plates) {
+        // First decide if continental or oceanic
+        // For Pangea, plates closer to the center are more likely to be continental
+        bool isContinental;
+        
+        if (pangea) {
+            float distToPangeaCenter = (plate.center - pangeaCenter).length() / m_planetRadius;
+            float continentalProbability = std::max(0.0f, 1.0f - distToPangeaCenter);
+            isContinental = std::uniform_real_distribution<float>(0.0f, 1.0f)(m_engine) < continentalProbability;
+        } else {
+            // Random distribution across the planet
+            isContinental = std::uniform_real_distribution<float>(0.0f, 1.0f)(m_engine) < m_params.continentalPercent;
+        }
+        
+        // Set properties based on crust type
+        plate.isOceanic = !isContinental;
+        
+        if (isContinental) {
+            // Continental crust: thicker, less dense
+            plate.thickness = getRandomContinentalThickness();
+            plate.density = getRandomContinentalDensity();
+            plate.buoyancy = 1.2f;
+            plate.age = std::uniform_real_distribution<float>(50.0f, 3000.0f)(m_engine); // Continental crust can be very old
+        } else {
+            // Oceanic crust: thinner, denser
+            plate.thickness = getRandomOceanicThickness();
+            plate.density = getRandomOceanicDensity();
+            plate.buoyancy = 0.8f;
+            plate.age = std::uniform_real_distribution<float>(0.0f, 180.0f)(m_engine); // Oceanic crust is younger
+        }
+        
+        // Calculate velocity based on position and crust type
+        plate.velocity = calculateInitialVelocity(plate.center, isContinental);
+    }
+    
+    // Identify neighboring plates (needed for boundary interactions)
+    for (auto& plate : m_plates) {
+        std::unordered_set<int> neighbors;
+        
+        // For each boundary point, check if it's close to boundaries of other plates
+        for (const auto& boundary : plate.boundaries) {
+            Math::Vector3 boundaryPoint(
+                boundary.radius * std::sin(boundary.theta) * std::cos(boundary.phi),
+                boundary.radius * std::sin(boundary.theta) * std::sin(boundary.phi),
+                boundary.radius * std::cos(boundary.theta)
+            );
+            
+            for (const auto& otherPlate : m_plates) {
+                if (otherPlate.id == plate.id) continue;
+                
+                for (const auto& otherBoundary : otherPlate.boundaries) {
+                    Math::Vector3 otherPoint(
+                        otherBoundary.radius * std::sin(otherBoundary.theta) * std::cos(otherBoundary.phi),
+                        otherBoundary.radius * std::sin(otherBoundary.theta) * std::sin(otherBoundary.phi),
+                        otherBoundary.radius * std::cos(otherBoundary.theta)
+                    );
+                    
+                    if ((boundaryPoint - otherPoint).length() < m_planetRadius * 0.1f) {
+                        neighbors.insert(otherPlate.id);
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // Store neighbor IDs
+        plate.neighborIds.assign(neighbors.begin(), neighbors.end());
+    }
+}
+
+void PlateGenerator::createWeakZones() {
+    // Create weak zones where plates might split in the future
+    // This is a simplified version - real implementation would be more complex
+    
+    // For each plate, potentially create a weak zone
+    for (auto& plate : m_plates) {
+        // Only some plates get weak zones
+        if (std::uniform_real_distribution<float>(0.0f, 1.0f)(m_engine) < 0.3f) {
+            // Create a fracture through the plate
+            Math::Vector3 start = Math::GeoMath::randomUnitVector(m_engine) * m_planetRadius;
+            Math::Vector3 end = Math::GeoMath::randomUnitVector(m_engine) * m_planetRadius;
+            
+            // Random width and depth
+            float width = std::uniform_real_distribution<float>(0.005f, 0.02f)(m_engine);
+            float depth = std::uniform_real_distribution<float>(5.0f, 20.0f)(m_engine);
+            
+            // Add fracture
+            m_fractures.push_back({start, end, width, depth});
+        }
+    }
+}
+
+void PlateGenerator::balanceCrustTypes(float continentalPercent) {
+    // Ensure that continental crust covers approximately the target percentage of the surface
+    
+    // Count current distribution
+    int continentalCount = 0;
+    for (const auto& plate : m_plates) {
+        if (!plate.isOceanic) continentalCount++;
+    }
+    
+    // Calculate target count
+    int targetContinental = static_cast<int>(m_plates.size() * continentalPercent);
+    
+    // Adjust if needed
+    if (continentalCount > targetContinental) {
+        // Too many continental plates, convert some to oceanic
+        int toConvert = continentalCount - targetContinental;
+        
+        // Sort plates by size (number of boundary points as proxy)
+        std::vector<std::pair<int, size_t>> platesBySize;
+        for (int i = 0; i < m_plates.size(); i++) {
+            if (!m_plates[i].isOceanic) {
+                platesBySize.push_back({i, m_plates[i].boundaries.size()});
+            }
+        }
+        
+        // Sort by ascending size
+        std::sort(platesBySize.begin(), platesBySize.end(), 
+                 [](const auto& a, const auto& b) { return a.second < b.second; });
+        
+        // Convert smallest continental plates to oceanic
+        for (int i = 0; i < std::min(toConvert, static_cast<int>(platesBySize.size())); i++) {
+            int plateIdx = platesBySize[i].first;
+            m_plates[plateIdx].isOceanic = true;
+            m_plates[plateIdx].thickness = getRandomOceanicThickness();
+            m_plates[plateIdx].density = getRandomOceanicDensity();
+            m_plates[plateIdx].buoyancy = 0.8f;
+            m_plates[plateIdx].age = std::uniform_real_distribution<float>(0.0f, 180.0f)(m_engine);
+        }
+    } 
+    else if (continentalCount < targetContinental) {
+        // Too few continental plates, convert some oceanic to continental
+        int toConvert = targetContinental - continentalCount;
+        
+        // Sort oceanic plates by size
+        std::vector<std::pair<int, size_t>> platesBySize;
+        for (int i = 0; i < m_plates.size(); i++) {
+            if (m_plates[i].isOceanic) {
+                platesBySize.push_back({i, m_plates[i].boundaries.size()});
+            }
+        }
+        
+        // Sort by descending size
+        std::sort(platesBySize.begin(), platesBySize.end(), 
+                 [](const auto& a, const auto& b) { return a.second > b.second; });
+        
+        // Convert largest oceanic plates to continental
+        for (int i = 0; i < std::min(toConvert, static_cast<int>(platesBySize.size())); i++) {
+            int plateIdx = platesBySize[i].first;
+            m_plates[plateIdx].isOceanic = false;
+            m_plates[plateIdx].thickness = getRandomContinentalThickness();
+            m_plates[plateIdx].density = getRandomContinentalDensity();
+            m_plates[plateIdx].buoyancy = 1.2f;
+            m_plates[plateIdx].age = std::uniform_real_distribution<float>(50.0f, 3000.0f)(m_engine);
+        }
+    }
+}
+
+void PlateGenerator::createHotspots() {
+    // Create mantle hotspots/plumes
+    int numHotspots = static_cast<int>(4 * M_PI * m_planetRadius * m_planetRadius * m_params.hotspotDensity);
+    
+    for (int i = 0; i < numHotspots; i++) {
+        m_hotspots.push_back(Math::GeoMath::randomUnitVector(m_engine) * m_planetRadius);
+    }
+}
+
+Math::Vector3 PlateGenerator::calculateInitialVelocity(const Math::Vector3& position, bool isContinental) {
+    // Create Earth-like velocity patterns
+    // Plates move differently based on their position (latitude)
+    
+    // Extract latitude information from position (y-axis in spherical coords)
+    float latitude = std::asin(position.normalized().z);
+    
+    // Direction changes based on latitude (mimicking Earth's major currents)
+    Math::Vector3 direction;
+    
+    // Simplified Earth plate motion: 
+    // - Equatorial regions tend to move east-west
+    // - Mid latitudes tend to have more complex movements
+    // - Polar regions have different movement patterns
+    if (std::abs(latitude) < 0.2f) { // Equatorial
+        direction = Math::Vector3(
+            std::sin(position.y * 2.0f), // East-west oscillation
+            -std::cos(position.x * 2.0f), // North-south component
+            0.0f  // Minimal vertical
+        ).normalized();
+    } 
+    else if (std::abs(latitude) < 0.6f) { // Mid-latitudes
+        if (latitude > 0) { // Northern hemisphere
+            direction = Math::Vector3(
+                std::cos(position.y * 3.0f),
+                std::sin(position.x * 3.0f),
+                0.1f * std::sin(position.x + position.y)
+            ).normalized();
+        } else { // Southern hemisphere
+            direction = Math::Vector3(
+                -std::cos(position.y * 3.0f),
+                -std::sin(position.x * 3.0f),
+                0.1f * std::sin(position.x + position.y)
+            ).normalized();
+        }
+    } 
+    else { // Polar regions
+        direction = Math::Vector3(
+            std::cos(position.x * 4.0f),
+            std::sin(position.y * 4.0f),
+            0.05f * std::cos(position.x * position.y)
+        ).normalized();
+    }
+    
+    // Calculate speed based on plate type
+    // Continental plates generally move slower than oceanic plates
+    float speed;
+    if (isContinental) {
+        speed = std::uniform_real_distribution<float>(0.2f, 0.5f)(m_engine);
+    } else {
+        speed = std::uniform_real_distribution<float>(0.4f, 0.8f)(m_engine);
+    }
+    
+    return direction * speed;
 }
 
 void PlateGenerator::CreateVoronoiCells(std::vector<Plate>& plates, float sphereRadius) {
@@ -95,8 +543,93 @@ void PlateGenerator::CreateVoronoiCells(std::vector<Plate>& plates, float sphere
     }
 }
 
+// Helper methods for fracture calculations
+float PlateGenerator::distancePointToLineSegment(
+    const Math::Vector3& point, 
+    const Math::Vector3& lineStart, 
+    const Math::Vector3& lineEnd) {
+    
+    Math::Vector3 ab = lineEnd - lineStart;
+    Math::Vector3 ac = point - lineStart;
+    
+    float proj = ac.dot(ab) / ab.lengthSquared();
+    
+    if (proj < 0) {
+        return (point - lineStart).length();
+    } else if (proj > 1) {
+        return (point - lineEnd).length();
+    } else {
+        Math::Vector3 closest = lineStart + ab * proj;
+        return (point - closest).length();
+    }
+}
+
+bool PlateGenerator::lineSegmentsIntersect(
+    const Math::Vector3& p1, const Math::Vector3& p2,
+    const Math::Vector3& p3, const Math::Vector3& p4) {
+    
+    // This is a simplified approximation for 3D line segment intersection
+    // Accurate 3D line segment intersection is more complex
+    
+    // Create planes containing each line segment and the origin
+    Math::Vector3 n1 = p1.cross(p2).normalized();
+    Math::Vector3 n2 = p3.cross(p4).normalized();
+    
+    // Check if the planes are nearly parallel
+    if (std::abs(n1.dot(n2)) > 0.9999f) {
+        return false;
+    }
+    
+    // Check if p3 and p4 are on opposite sides of plane 1
+    float d3 = p3.dot(n1);
+    float d4 = p4.dot(n1);
+    if (d3 * d4 > 0) {
+        return false;
+    }
+    
+    // Check if p1 and p2 are on opposite sides of plane 2
+    float d1 = p1.dot(n2);
+    float d2 = p2.dot(n2);
+    if (d1 * d2 > 0) {
+        return false;
+    }
+    
+    // Lines intersect (simplified approximation)
+    return true;
+}
+
 const std::vector<Plate>& PlateGenerator::getPlates() const {
     return m_plates;
+}
+
+std::vector<Simulation::PlateTectonics::Plate> PlateGenerator::convertToTectonicPlates() const {
+    std::vector<Simulation::PlateTectonics::Plate> tectonicPlates;
+    for(const auto& plate : m_plates) {
+        Simulation::PlateTectonics::Plate tectonicPlate;
+        tectonicPlate.id = plate.id;
+        
+        // Convert the boundaries to float vector
+        for(const auto& boundary : plate.boundaries) {
+            tectonicPlate.boundaries.push_back(boundary.radius);
+            tectonicPlate.boundaries.push_back(boundary.theta);
+            tectonicPlate.boundaries.push_back(boundary.phi);
+        }
+        
+        // Calculate angular velocity based on plate movement characteristics
+        tectonicPlate.angularVelocity = plate.velocity.length() / (m_planetRadius * 1000.0f); // Convert km to meters
+        tectonicPlate.thickness = plate.thickness;
+        tectonicPlate.density = plate.density;
+        
+        // Add new properties
+        tectonicPlate.isOceanic = plate.isOceanic;
+        tectonicPlate.age = plate.age;
+        
+        // Add neighbors
+        tectonicPlate.neighborIds = plate.neighborIds;
+        
+        tectonicPlates.push_back(tectonicPlate);
+    }
+    return tectonicPlates;
 }
 
 } // namespace Tools

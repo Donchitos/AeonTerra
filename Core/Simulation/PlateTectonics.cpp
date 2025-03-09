@@ -23,17 +23,21 @@ PlateTectonics::PlateTectonics()
     // Initialize with empty plates array
 }
 
+// Replace the original SimulateFrame method with this enhanced version
 void PlateTectonics::SimulateFrame(float deltaYears) {
     // Convert years to seconds for physics calculations
     const float deltaSeconds = deltaYears * 365.25f * 24.0f * 60.0f * 60.0f;
     
-    // Calculate forces from mantle convection
-    CalculateMantleForces();
+    // Calculate forces from mantle convection using improved model
+    CalculateImprovedMantleForces();
     
     // Apply forces to plates and update velocities
     for (auto& plate : plates) {
+        // Get force vector for this plate
+        ForceVector forceVec = mantleForcesWithDirection[plate.id];
+        
         // Apply mantle force to angular velocity
-        float mantleForce = mantleForces[plate.id];
+        float mantleForce = forceVec.magnitude;
         plate.angularVelocity += mantleForce * deltaSeconds / (plate.thickness * plate.density);
         
         // Apply viscous drag from mantle (improved model)
@@ -384,5 +388,201 @@ std::vector<PlateTectonics::BoundaryPoint> PlateTectonics::GetConvergentBoundari
     return convergentBoundaries;
 }
 
+// Add after the existing CalculateMantleForces method
+void PlateTectonics::CalculateImprovedMantleForces() {
+    // Clear previous forces
+    mantleForcesWithDirection.clear();
+    
+    // Create a more realistic mantle convection pattern
+    // Based on Earth's major convection cells
+    std::vector<MantelCell> convectionCells = CreateEarthLikeConvectionPattern();
+    
+    // For each plate, calculate forces from all convection cells
+    for (const auto& plate : plates) {
+        float totalForce = 0.0f;
+        Math::Vector3 forceDirection(0, 0, 0);
+        
+        // Sample multiple points on the plate to get better force distribution
+        std::vector<Math::Vector3> samplePoints = SamplePlatePoints(plate, 10);
+        
+        for (const auto& point : samplePoints) {
+            // Calculate influence from each convection cell
+            for (const auto& cell : convectionCells) {
+                // Convert boundary points from spherical to cartesian for easier calculations
+                Math::Vector3 cartPoint;
+                
+                // We need to have some point on the plate to calculate distance
+                // This is a simplification - in a real implementation we would
+                // properly sample points from plate.boundaries
+                if (plate.boundaries.size() >= 3) {
+                    Math::SphericalCoord spherePoint{
+                        plate.boundaries[0],
+                        plate.boundaries[1],
+                        plate.boundaries[2]
+                    };
+                    
+                    // Convert to cartesian
+                    cartPoint = Math::Vector3(
+                        spherePoint.radius * sin(spherePoint.theta) * cos(spherePoint.phi),
+                        spherePoint.radius * sin(spherePoint.theta) * sin(spherePoint.phi),
+                        spherePoint.radius * cos(spherePoint.theta)
+                    );
+                } else {
+                    // Fallback if no boundaries
+                    cartPoint = Math::Vector3(0, 0, 0);
+                }
+                
+                float distance = (cartPoint - cell.center).length();
+                float influence = CalculateCellInfluence(distance, cell);
+                
+                // Apply force in cell's flow direction
+                forceDirection += cell.flowDirection * influence;
+                totalForce += influence;
+            }
+        }
+        
+        // Average the force and normalize direction
+        if (!samplePoints.empty()) {
+            totalForce /= samplePoints.size();
+            
+            if (forceDirection.lengthSquared() > 0) {
+                forceDirection = forceDirection.normalized();
+            } else {
+                forceDirection = Math::Vector3(0, 0, 1); // Default direction
+            }
+        }
+        
+        // Thickness affects resistance to movement
+        float thicknessModifier = 100.0f / plate.thickness;
+        
+        // Density affects buoyancy
+        float densityModifier = 3000.0f / plate.density;
+        
+        // Calculate final force with realistic magnitude
+        float appliedForce = totalForce * thicknessModifier * densityModifier;
+        
+        // Store force with direction
+        mantleForcesWithDirection[plate.id] = {appliedForce, forceDirection};
+        
+        // Also store in the original magnitude-only format for compatibility
+        mantleForces[plate.id] = appliedForce;
+    }
+}
+
+std::vector<PlateTectonics::MantelCell> PlateTectonics::CreateEarthLikeConvectionPattern() {
+    std::vector<MantelCell> cells;
+    
+    // Earth has several major convection cells
+    // We'll create a simplified model with 8 major cells
+    
+    // Create convection cells with specific patterns
+    // Hadley cells (tropical)
+    cells.push_back({
+        Math::Vector3(0, 1, 0),         // Center near equator
+        Math::Vector3(0, 0.2f, 1),      // Flow upward and slightly north
+        1.2f                            // Stronger convection
+    });
+    
+    cells.push_back({
+        Math::Vector3(0, -1, 0),        // Center near equator (south)
+        Math::Vector3(0, -0.2f, 1),     // Flow upward and slightly south
+        1.2f                            // Stronger convection
+    });
+    
+    // Ferrel cells (mid-latitude)
+    cells.push_back({
+        Math::Vector3(0, 0.5f, 0.7f),   // Northern mid-latitude
+        Math::Vector3(0, -0.2f, -0.1f), // Flow mostly southward
+        0.8f                            // Medium convection
+    });
+    
+    cells.push_back({
+        Math::Vector3(0, -0.5f, -0.7f), // Southern mid-latitude
+        Math::Vector3(0, 0.2f, 0.1f),   // Flow mostly northward
+        0.8f                            // Medium convection
+    });
+    
+    // Polar cells
+    cells.push_back({
+        Math::Vector3(0, 0, 1),         // North pole
+        Math::Vector3(0, -0.1f, -1),    // Flow downward and slightly south
+        0.7f                            // Weaker convection
+    });
+    
+    cells.push_back({
+        Math::Vector3(0, 0, -1),        // South pole
+        Math::Vector3(0, 0.1f, 1),      // Flow upward and slightly north
+        0.7f                            // Weaker convection
+    });
+    
+    // Add a few more cells for east-west variations
+    cells.push_back({
+        Math::Vector3(1, 0, 0),         // Eastern cell
+        Math::Vector3(-1, 0.1f, 0),     // Flow westward
+        0.6f                            // Weaker lateral convection
+    });
+    
+    cells.push_back({
+        Math::Vector3(-1, 0, 0),        // Western cell
+        Math::Vector3(1, -0.1f, 0),     // Flow eastward
+        0.6f                            // Weaker lateral convection
+    });
+    
+    return cells;
+}
+
+std::vector<Math::Vector3> PlateTectonics::SamplePlatePoints(const Plate& plate, int sampleCount) {
+    std::vector<Math::Vector3> points;
+    
+    // Early exit if no boundaries to sample from
+    if (plate.boundaries.size() < 3) {
+        return points;
+    }
+    
+    // Sample points from plate boundaries
+    // This is a simplification - we're just taking regular samples from available coordinates
+    for (int i = 0; i < sampleCount; i++) {
+        // Find an index that's safely within the boundaries array
+        size_t index = (i * 3) % (plate.boundaries.size() - 2);
+        
+        if (index + 2 >= plate.boundaries.size()) {
+            continue;
+        }
+        
+        // Extract spherical coordinates
+        Math::SphericalCoord spherePoint{
+            plate.boundaries[index],
+            plate.boundaries[index + 1],
+            plate.boundaries[index + 2]
+        };
+        
+        // Convert to cartesian
+        Math::Vector3 cartPoint(
+            spherePoint.radius * sin(spherePoint.theta) * cos(spherePoint.phi),
+            spherePoint.radius * sin(spherePoint.theta) * sin(spherePoint.phi),
+            spherePoint.radius * cos(spherePoint.theta)
+        );
+        
+        points.push_back(cartPoint);
+    }
+    
+    return points;
+}
+
+float PlateTectonics::CalculateCellInfluence(float distance, const MantelCell& cell) {
+    // Calculate cell influence based on distance
+    // Closer points are more influenced
+    const float maxDistance = 2.0f; // Maximum effect distance
+    
+    if (distance >= maxDistance) {
+        return 0.0f;
+    }
+    
+    // Exponential falloff
+    float normalizedDistance = distance / maxDistance;
+    float influence = std::exp(-normalizedDistance * 3.0f) * cell.strength;
+    
+    return influence * 1e15f; // Scale to appropriate magnitude
+}
 } // namespace Simulation
 } // namespace AeonTerra

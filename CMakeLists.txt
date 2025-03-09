@@ -52,3 +52,22 @@ endif()
 install(TARGETS AeonTerraTest PlanetSimulator
     RUNTIME DESTINATION bin
 )
+# Add the new visualizer application
+add_executable(PlanetVisualizer PlanetVisualizer.cpp)
+target_link_libraries(PlanetVisualizer PRIVATE Core Tools)
+
+if(WIN32)
+    set_target_properties(PlanetVisualizer PROPERTIES
+        WIN32_EXECUTABLE FALSE
+    )
+endif()
+
+# Ensure we use C++17 filesystem library
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9.0)
+    target_link_libraries(PlanetVisualizer PRIVATE stdc++fs)
+endif()
+
+# Install the visualizer
+install(TARGETS PlanetVisualizer
+    RUNTIME DESTINATION bin
+)
