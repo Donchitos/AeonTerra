@@ -4,10 +4,12 @@ set(CORE_HEADERS
     Mathematics/Vector3.h
     Mathematics/GeoMath.h
     Simulation/PlateTectonics.h
+    Simulation/GeologicalTimeline.h
 )
 
 set(CORE_SOURCES
     Simulation/PlateTectonics.cpp
+    Simulation/GeologicalTimeline.cpp
 )
 
 add_library(Core STATIC ${CORE_HEADERS} ${CORE_SOURCES})

@@ -1,210 +1,194 @@
+#include "Core/Simulation/PlateTectonics.h"
+#include "Core/Simulation/GeologicalTimeline.h"
+#include "Tools/WorldBuilder/PlateGenerator.h"
+#include "Tools/HeightmapGenerator.h"
+#include "Tools/TectonicVisualizer.h"
 #include <iostream>
 #include <string>
-#include <vector>
 #include <chrono>
 #include <thread>
 #include <filesystem>
-#include "Core/Simulation/PlateTectonics.h"
-#include "Tools/WorldBuilder/PlateGenerator.h"
-#include "Tools/HeightmapGenerator.h"
 
-// Visualization configuration
-struct VisualizationConfig {
-    int resolution = 1024;          // Image resolution
-    int plateCount = 15;            // Number of tectonic plates
-    float planetRadius = 6371.0f;   // Planet radius in km (Earth-like)
-    float timeStep = 1000000.0f;    // Simulation time step in years
-    int frames = 20;                // Number of frames to simulate
-    std::string outputDir = "./output"; // Output directory for images
-    bool showPlates = true;         // Generate plate boundary maps
-    bool showHeightmap = true;      // Generate height maps
-    bool showRelief = true;         // Generate relief maps
-    bool createAnimation = true;    // Create animation frames
-    bool useRealisticPlates = true; // Use the new realistic plate generation
-    bool startWithPangea = false;   // Start with a Pangea-like supercontinent
-};
+using namespace AeonTerra;
 
-void printSimulationInfo(const AeonTerra::Simulation::PlateTectonics& tectonics) {
-    const auto& plates = tectonics.GetPlates();
-    const auto& boundaries = tectonics.GetConvergentBoundaries();
-    
-    std::cout << "=== Simulation Information ===" << std::endl;
-    std::cout << "Time: " << tectonics.GetSimulationTime() / 1000000.0 << " million years" << std::endl;
-    std::cout << "Plates: " << plates.size() << std::endl;
-    std::cout << "Convergent Boundaries: " << boundaries.size() << std::endl;
-    
-    // Show plate details
-    std::cout << "\nPlate Details:" << std::endl;
-    std::cout << "ID\tDensity\tThickness\tAngular Velocity" << std::endl;
-    for (const auto& plate : plates) {
-        std::cout << plate.id << "\t" 
-                  << plate.density << "\t" 
-                  << plate.thickness << "\t\t" 
-                  << plate.angularVelocity << std::endl;
-    }
-    
-    // Show high mountains and deep trenches
-    if (!boundaries.empty()) {
-        float maxHeight = boundaries[0].height;
-        float minHeight = boundaries[0].height;
-        int maxIdx = 0, minIdx = 0;
-        
-        for (size_t i = 1; i < boundaries.size(); i++) {
-            if (boundaries[i].height > maxHeight) {
-                maxHeight = boundaries[i].height;
-                maxIdx = i;
-            }
-            if (boundaries[i].height < minHeight) {
-                minHeight = boundaries[i].height;
-                minIdx = i;
-            }
-        }
-        
-        std::cout << "\nHighest mountain: " << maxHeight << " meters" << std::endl;
-        std::cout << "Deepest trench: " << minHeight << " meters" << std::endl;
-    }
+void PrintUsage() {
+    std::cout << "AeonTerra Planet Visualizer\n";
+    std::cout << "Usage:\n";
+    std::cout << "  -p <plateCount>   : Number of tectonic plates (default: 12)\n";
+    std::cout << "  -r <radiusKm>     : Planet radius in km (default: 6371)\n";
+    std::cout << "  -s <seed>         : Random seed for generation (default: time-based)\n";
+    std::cout << "  -t <timeStepMY>   : Time step in millions of years (default: 10)\n";
+    std::cout << "  -o <outputFolder> : Output folder for visualizations (default: ./output)\n";
+    std::cout << "  -pangea           : Start with a Pangea-like supercontinent\n";
+    std::cout << "  -fantasy          : Create a fantasy world instead of Earth-like\n";
+    std::cout << "  -h, --help        : Show this help message\n";
 }
 
-int main(int argc, char* argv[]) {
-    VisualizationConfig config;
+int main(int argc, char** argv) {
+    // Default parameters
+    int plateCount = 12;
+    float planetRadius = 6371.0f;
+    uint32_t seed = static_cast<uint32_t>(std::chrono::system_clock::now().time_since_epoch().count());
+    float timeStepMY = 10.0f;  // Million years
+    std::string outputFolder = "./output";
+    bool startWithPangea = false;
+    bool fantasyWorld = false;
     
-    // Create output directory if it doesn't exist
-    std::filesystem::create_directories(config.outputDir);
-    
-    std::cout << "AeonTerra Planet Visualizer" << std::endl;
-    std::cout << "==========================" << std::endl;
-    
-    // Initialize plate generator with random seed
-    std::random_device rd;
-    AeonTerra::Tools::PlateGenerator plateGen(rd());
-    
-    // Set custom parameters for realistic plate generation
-    AeonTerra::Tools::PlateGenerator::GenerationParams genParams;
-    genParams.continentalPercent = 0.35f;  // 35% continental crust (like Earth)
-    genParams.maxFragmentation = 0.7f;     // Degree of fragmentation
-    genParams.irregularity = 0.65f;        // Irregularity of plate shapes
-    plateGen.setGenerationParams(genParams);
-    
-    // Generate initial plates using the improved realistic method
-    std::cout << "Generating " << config.plateCount << " tectonic plates..." << std::endl;
-    if (config.useRealisticPlates) {
-        plateGen.generateEarthLikePlates(config.plateCount, config.planetRadius, config.startWithPangea);
-        std::cout << "Using realistic Earth-like plate generation" << std::endl;
-    } else {
-        plateGen.generatePlates(config.plateCount, config.planetRadius);
-        std::cout << "Using basic plate generation" << std::endl;
+    // Parse command line arguments
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        
+        if (arg == "-p" && i + 1 < argc) {
+            plateCount = std::stoi(argv[++i]);
+        }
+        else if (arg == "-r" && i + 1 < argc) {
+            planetRadius = std::stof(argv[++i]);
+        }
+        else if (arg == "-s" && i + 1 < argc) {
+            seed = static_cast<uint32_t>(std::stoul(argv[++i]));
+        }
+        else if (arg == "-t" && i + 1 < argc) {
+            timeStepMY = std::stof(argv[++i]);
+        }
+        else if (arg == "-o" && i + 1 < argc) {
+            outputFolder = argv[++i];
+        }
+        else if (arg == "-pangea") {
+            startWithPangea = true;
+        }
+        else if (arg == "-fantasy") {
+            fantasyWorld = true;
+        }
+        else if (arg == "-h" || arg == "--help") {
+            PrintUsage();
+            return 0;
+        }
     }
     
-    // Create tectonic simulation
-    AeonTerra::Simulation::PlateTectonics tectonics;
-    tectonics.LoadPlatesFromGenerator(plateGen);
+    std::cout << "AeonTerra Planet Visualizer\n";
+    std::cout << "----------------------------\n";
+    std::cout << "Plate Count: " << plateCount << "\n";
+    std::cout << "Planet Radius: " << planetRadius << " km\n";
+    std::cout << "Random Seed: " << seed << "\n";
+    std::cout << "Time Step: " << timeStepMY << " million years\n";
+    std::cout << "Output Folder: " << outputFolder << "\n";
+    std::cout << "Start with Pangea: " << (startWithPangea ? "Yes" : "No") << "\n";
+    std::cout << "World Type: " << (fantasyWorld ? "Fantasy" : "Earth-like") << "\n";
+    std::cout << "----------------------------\n";
     
-    // Configure tectonic parameters
-    tectonics.SetMantleViscosity(1e21f);  // Earth-like mantle viscosity
-    tectonics.SetSeafloorSpreadingRate(50.0f);    // 50 mm/year (typical Earth rate)
-    tectonics.SetSubductionRate(80.0f);           // 80 mm/year
-    tectonics.SetContinentalCollisionRate(30.0f); // 30 mm/year
+    // Create output directory
+    std::filesystem::path outputPath(outputFolder);
+    if (!std::filesystem::exists(outputPath)) {
+        std::filesystem::create_directories(outputPath);
+    }
     
-    // Initialize heightmap generator
-    AeonTerra::Tools::HeightmapGenerator heightmapGen;
-    heightmapGen.SetSeed(rd());
+    // Initialize planet
+    std::cout << "Generating plates...\n";
+    Tools::PlateGenerator plateGenerator(seed);
     
-    // Configure heightmap options
-    AeonTerra::Tools::HeightmapGenerator::Options heightmapOptions;
-    heightmapOptions.resolution = config.resolution;
-    heightmapOptions.oceanDepth = -8000.0f;
-    heightmapOptions.continentHeight = 500.0f;
-    heightmapOptions.mountainScale = 8000.0f;
+    if (fantasyWorld) {
+        // Set fantasy parameters
+        Tools::PlateGenerator::GenerationParams params;
+        params.continentalPercent = 0.4f;    // More continental crust
+        params.maxFragmentation = 0.8f;      // More fragmented plates
+        params.irregularity = 0.7f;          // More irregular boundaries
+        plateGenerator.setGenerationParams(params);
+    }
     
-    // Generate initial heightmap
-    std::vector<float> initialHeightmap = heightmapGen.GenerateHeightmap(tectonics, heightmapOptions);
+    // Generate plates
+    plateGenerator.generateEarthLikePlates(plateCount, planetRadius, startWithPangea);
+    
+    // Initialize simulation
+    std::cout << "Setting up tectonic simulation...\n";
+    Simulation::PlateTectonics tectonics;
+    tectonics.LoadPlatesFromGenerator(plateGenerator);
+    
+    // Initialize timeline
+    Simulation::GeologicalTimeline timeline;
+    if (fantasyWorld) {
+        timeline.InitializeFantasy(seed);
+    } else {
+        timeline.InitializeEarthLike();
+    }
+    
+    // Initialize visualizer
+    Tools::TectonicVisualizer visualizer;
     
     // Save initial state
-    std::string initialHeightmapFile = config.outputDir + "/initial_heightmap.ppm";
-    std::string initialPlatesFile = config.outputDir + "/initial_plates.ppm";
-    std::string initialReliefFile = config.outputDir + "/initial_relief.ppm";
+    std::cout << "Generating initial visualizations...\n";
     
-    if (config.showHeightmap) {
-        std::cout << "Saving initial heightmap..." << std::endl;
-        heightmapGen.SaveHeightmapPNG(initialHeightmapFile, initialHeightmap, config.resolution);
-    }
+    // Generate heightmap
+    Tools::HeightmapGenerator heightmapGen;
+    heightmapGen.SetSeed(seed);
     
-    if (config.showPlates) {
-        std::cout << "Saving initial plate map..." << std::endl;
-        heightmapGen.SavePlateMap(initialPlatesFile, tectonics, config.resolution);
-    }
+    Tools::HeightmapGenerator::Options options;
+    options.resolution = 2048;
     
-    if (config.showRelief) {
-        std::cout << "Saving initial relief map..." << std::endl;
-        heightmapGen.SaveShadedReliefMap(initialReliefFile, initialHeightmap, config.resolution);
-    }
+    std::cout << "Generating initial heightmap...\n";
+    std::vector<float> initialHeightmap = heightmapGen.GenerateHeightmap(tectonics, options);
     
-    // Run simulation over multiple time steps
-    if (config.frames > 1) {
-        std::cout << "\nRunning plate tectonic simulation..." << std::endl;
-        std::cout << "Simulating " << config.frames << " frames with " 
-                  << config.timeStep / 1000000.0 << " million years per step" << std::endl;
+    // Save initial state visualizations
+    std::string initialHeightmapFile = outputFolder + "/initial_heightmap.png";
+    std::cout << "Saving initial heightmap to " << initialHeightmapFile << "\n";
+    heightmapGen.SaveHeightmapPNG(initialHeightmapFile, initialHeightmap, options.resolution);
+    
+    std::string initialPlateFile = outputFolder + "/initial_plates.png";
+    std::cout << "Saving initial plate map to " << initialPlateFile << "\n";
+    heightmapGen.SavePlateMap(initialPlateFile, tectonics, options.resolution);
+    
+    std::string initialReliefFile = outputFolder + "/initial_relief.png";
+    std::cout << "Saving initial relief map to " << initialReliefFile << "\n";
+    heightmapGen.SaveShadedReliefMap(initialReliefFile, initialHeightmap, options.resolution);
+    
+    // Generate cross-section
+    std::string crossSectionFile = outputFolder + "/cross_section.png";
+    std::cout << "Generating cross-section to " << crossSectionFile << "\n";
+    visualizer.GenerateCrustMantelSection(tectonics, 0.0f, 0.0f, 3000.0f, crossSectionFile);
+    
+    // Generate stress map
+    std::string stressFile = outputFolder + "/stress_map.png";
+    std::cout << "Generating stress map to " << stressFile << "\n";
+    visualizer.GenerateStressMap(tectonics, stressFile);
+    
+    // Simulate tectonic evolution
+    // Number of steps to simulate
+    const int SIMULATION_STEPS = 10;
+    
+    std::cout << "\nSimulating tectonic evolution...\n";
+    for (int step = 0; step < SIMULATION_STEPS; step++) {
+        float progress = static_cast<float>(step) / SIMULATION_STEPS * 100.0f;
+        std::cout << "Simulation progress: " << progress << "%" << std::endl;
         
-        // Store a copy of the initial heightmap for final comparison
-        std::vector<float> veryInitialHeightmap = initialHeightmap;
+        // Run simulation for this time step
+        float yearsToSimulate = timeStepMY * 1000000.0f;
+        tectonics.SimulateFrame(yearsToSimulate);
         
-        for (int frame = 1; frame <= config.frames; frame++) {
-            std::cout << "\nSimulating frame " << frame << "..." << std::endl;
-            
-            // Run simulation step
-            tectonics.SimulateFrame(config.timeStep);
-            
-            // Print current simulation state
-            printSimulationInfo(tectonics);
-            
-            // Generate new heightmap
-            std::vector<float> currentHeightmap = heightmapGen.GenerateHeightmap(tectonics, heightmapOptions);
-            
-            if (config.createAnimation) {
-                // Save heightmap for this frame
-                std::string frameHeightmapFile = config.outputDir + "/frame_" + 
-                                              std::to_string(frame) + "_heightmap.ppm";
-                std::string framePlatesFile = config.outputDir + "/frame_" + 
-                                           std::to_string(frame) + "_plates.ppm";
-                std::string frameReliefFile = config.outputDir + "/frame_" + 
-                                           std::to_string(frame) + "_relief.ppm";
-                
-                if (config.showHeightmap) {
-                    heightmapGen.SaveHeightmapPNG(frameHeightmapFile, currentHeightmap, config.resolution);
-                }
-                
-                if (config.showPlates) {
-                    heightmapGen.SavePlateMap(framePlatesFile, tectonics, config.resolution);
-                }
-                
-                if (config.showRelief) {
-                    heightmapGen.SaveShadedReliefMap(frameReliefFile, currentHeightmap, config.resolution);
-                }
-                
-                // Save comparison with previous frame
-                if (frame > 1) {
-                    std::string comparisonFile = config.outputDir + "/comparison_" + 
-                                              std::to_string(frame-1) + "_to_" + 
-                                              std::to_string(frame) + ".ppm";
-                    heightmapGen.SaveComparisonImage(comparisonFile, initialHeightmap, 
-                                                   currentHeightmap, config.resolution);
-                }
-            }
-            
-            // Use current heightmap as reference for next comparison
-            initialHeightmap = currentHeightmap;
-            
-            std::cout << "Frame " << frame << " complete." << std::endl;
-        }
+        // Save state at this step
+        std::string stepFolder = outputFolder + "/step_" + std::to_string(step + 1);
+        std::filesystem::create_directories(stepFolder);
         
-        // Save final comparison between very first frame and last frame
-        std::string finalComparisonFile = config.outputDir + "/final_comparison.ppm";
-        heightmapGen.SaveComparisonImage(finalComparisonFile, veryInitialHeightmap, initialHeightmap, config.resolution);
+        // Generate heightmap for current step
+        std::vector<float> currentHeightmap = heightmapGen.GenerateHeightmap(tectonics, options);
+        
+        // Save visualizations
+        std::string heightmapFile = stepFolder + "/heightmap.png";
+        heightmapGen.SaveHeightmapPNG(heightmapFile, currentHeightmap, options.resolution);
+        
+        std::string plateFile = stepFolder + "/plates.png";
+        heightmapGen.SavePlateMap(plateFile, tectonics, options.resolution);
+        
+        std::string reliefFile = stepFolder + "/relief.png";
+        heightmapGen.SaveShadedReliefMap(reliefFile, currentHeightmap, options.resolution);
+        
+        std::string crossFile = stepFolder + "/cross_section.png";
+        visualizer.GenerateCrustMantelSection(tectonics, 0.0f, 0.0f, 3000.0f, crossFile);
+        
+        std::string stressFile = stepFolder + "/stress_map.png";
+        visualizer.GenerateStressMap(tectonics, stressFile);
     }
     
-    std::cout << "\nSimulation complete. Output files saved to: " << config.outputDir << std::endl;
-    std::cout << "To view the results, open the PPM files with an image viewer that supports this format." << std::endl;
-    std::cout << "Alternatively, convert them to PNG using ImageMagick or similar tools." << std::endl;
+    std::cout << "\nSimulation complete! Results saved to " << outputFolder << "\n";
+    std::cout << "Open the images to see the planet's evolution over time.\n";
     
     return 0;
 }

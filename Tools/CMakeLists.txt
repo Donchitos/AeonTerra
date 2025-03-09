@@ -4,6 +4,8 @@ set(TOOLS_SOURCES
     WorldBuilder/PlateGenerator.h
     HeightmapGenerator.cpp
     HeightmapGenerator.h
+    TectonicVisualizer.cpp 
+    TectonicVisualizer.h 
 )
 
 add_library(Tools STATIC ${TOOLS_SOURCES})
